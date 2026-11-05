@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
-const API_URL = "http://127.0.0.1:5002";
+const API_URL = "https://fueltrack-2.onrender.com";
 
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
