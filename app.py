@@ -1,4 +1,3 @@
-
 import os
 import logging
 from datetime import date
@@ -17,24 +16,44 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "127.0.0.1"),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", ""),
-    "database": os.getenv("DB_NAME", "fuel_analysis"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "connection_timeout": 5
+    "host": os.getenv("DB_HOST"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "database": os.getenv("DB_NAME", "defaultdb"),
+    "port": int(os.getenv("DB_PORT", "20555")),
+    "connection_timeout": 15,
+    "ssl_disabled": False
 }
 
 
 # --------------------------------------------------
-# CORS CONFIGURATION FOR REACT FRONTEND
+# CORS CONFIGURATION
 # --------------------------------------------------
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+
+    origin = request.headers.get("Origin")
+
+    allowed_origins = [
+        "http://localhost:5173",
+        "https://fuelmanagementsystem.netlify.app"
+    ]
+
+    if origin in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+
+    response.headers["Access-Control-Allow-Headers"] = (
+        "Content-Type, Authorization"
+    )
+
+    response.headers["Access-Control-Allow-Methods"] = (
+        "GET, POST, PUT, DELETE, OPTIONS"
+    )
+
+    response.headers["Access-Control-Max-Age"] = "86400"
+    response.headers["Vary"] = "Origin"
+
     return response
 
 
@@ -43,10 +62,12 @@ def add_cors_headers(response):
 # --------------------------------------------------
 
 def get_connection():
+
     return mysql.connector.connect(**DB_CONFIG)
 
 
 def close_database(connection=None, cursor=None):
+
     if cursor is not None:
         cursor.close()
 
@@ -55,7 +76,10 @@ def close_database(connection=None, cursor=None):
 
 
 def error_response(message, status_code):
-    return jsonify({"error": message}), status_code
+
+    return jsonify({
+        "error": message
+    }), status_code
 
 
 # --------------------------------------------------
@@ -64,10 +88,13 @@ def error_response(message, status_code):
 
 @app.get("/")
 def home():
+
     return jsonify({
         "message": "Fuel Consumption Analysis System API",
         "status": "Running",
         "routes": [
+            "/",
+            "/health",
             "/vehicles",
             "/fuel-records"
         ]
@@ -80,9 +107,11 @@ def home():
 
 @app.get("/health")
 def health():
+
     connection = None
 
     try:
+
         connection = get_connection()
 
         return jsonify({
@@ -92,14 +121,16 @@ def health():
         })
 
     except Error:
+
         logging.exception("MySQL health check failed")
 
         return error_response(
-            "MySQL connection failed. Check database credentials and server.",
+            "MySQL connection failed. Check database credentials and SSL configuration.",
             500
         )
 
     finally:
+
         close_database(connection)
 
 
@@ -109,11 +140,14 @@ def health():
 
 @app.get("/vehicles")
 def list_vehicles():
+
     connection = None
     cursor = None
 
     try:
+
         connection = get_connection()
+
         cursor = connection.cursor(dictionary=True)
 
         cursor.execute("""
@@ -131,14 +165,16 @@ def list_vehicles():
         return jsonify(vehicles)
 
     except Error:
+
         logging.exception("Could not read vehicles")
 
         return error_response(
-            "Could not read vehicles. Check MySQL configuration.",
+            "Could not read vehicles. Check MySQL configuration and database tables.",
             500
         )
 
     finally:
+
         close_database(connection, cursor)
 
 
@@ -148,13 +184,21 @@ def list_vehicles():
 
 @app.post("/vehicles")
 def add_vehicle():
+
     data = request.get_json(silent=True) or {}
 
     code = str(data.get("vehicle_code", "")).strip()
-    vehicle_type = str(data.get("vehicle_type", "")).strip()
-    fuel_type = str(data.get("fuel_type", "")).strip()
+
+    vehicle_type = str(
+        data.get("vehicle_type", "")
+    ).strip()
+
+    fuel_type = str(
+        data.get("fuel_type", "")
+    ).strip()
 
     if not code or not vehicle_type or not fuel_type:
+
         return error_response(
             "Vehicle code, vehicle type and fuel type are required.",
             400
@@ -164,14 +208,20 @@ def add_vehicle():
     cursor = None
 
     try:
+
         connection = get_connection()
+
         cursor = connection.cursor()
 
         cursor.execute("""
             INSERT INTO vehicles
             (vehicle_code, vehicle_type, fuel_type)
             VALUES (%s, %s, %s)
-        """, (code, vehicle_type, fuel_type))
+        """, (
+            code,
+            vehicle_type,
+            fuel_type
+        ))
 
         connection.commit()
 
@@ -181,12 +231,14 @@ def add_vehicle():
         }), 201
 
     except Error as exc:
+
         if connection and connection.is_connected():
             connection.rollback()
 
         logging.exception("Could not add vehicle")
 
         if getattr(exc, "errno", None) == 1062:
+
             return error_response(
                 "This vehicle code already exists.",
                 409
@@ -198,6 +250,7 @@ def add_vehicle():
         )
 
     finally:
+
         close_database(connection, cursor)
 
 
@@ -207,11 +260,14 @@ def add_vehicle():
 
 @app.get("/fuel-records")
 def list_fuel_records():
+
     connection = None
     cursor = None
 
     try:
+
         connection = get_connection()
+
         cursor = connection.cursor(dictionary=True)
 
         cursor.execute("""
@@ -226,36 +282,54 @@ def list_fuel_records():
                 r.litres,
                 r.total_cost,
                 r.full_tank_flag
+
             FROM fuel_records r
+
             JOIN vehicles v
                 ON v.vehicle_id = r.vehicle_id
-            ORDER BY r.fill_date DESC, r.record_id DESC
+
+            ORDER BY
+                r.fill_date DESC,
+                r.record_id DESC
         """)
 
         records = cursor.fetchall()
 
-        # Convert dates and decimal values into JSON-friendly values.
-        for record in records:
-            if record["fill_date"]:
-                record["fill_date"] = record["fill_date"].isoformat()
+        # Convert values into JSON-friendly formats.
 
-            for field in ("odometer_km", "litres", "total_cost"):
+        for record in records:
+
+            if record["fill_date"]:
+                record["fill_date"] = (
+                    record["fill_date"].isoformat()
+                )
+
+            for field in (
+                "odometer_km",
+                "litres",
+                "total_cost"
+            ):
+
                 if record[field] is not None:
                     record[field] = float(record[field])
 
-            record["full_tank_flag"] = bool(record["full_tank_flag"])
+            record["full_tank_flag"] = bool(
+                record["full_tank_flag"]
+            )
 
         return jsonify(records)
 
     except Error:
+
         logging.exception("Could not read fuel records")
 
         return error_response(
-            "Could not read fuel records. Check MySQL configuration.",
+            "Could not read fuel records. Check database configuration and tables.",
             500
         )
 
     finally:
+
         close_database(connection, cursor)
 
 
@@ -265,6 +339,7 @@ def list_fuel_records():
 
 @app.post("/fuel-records")
 def add_fuel_record():
+
     data = request.get_json(silent=True) or {}
 
     required = [
@@ -281,20 +356,28 @@ def add_fuel_record():
     ]
 
     if missing:
+
         return error_response(
             "Missing fields: " + ", ".join(missing),
             400
         )
 
     try:
+
         vehicle_id = int(data["vehicle_id"])
-        fill_date = date.fromisoformat(str(data["fill_date"]))
+
+        fill_date = date.fromisoformat(
+            str(data["fill_date"])
+        )
 
         odometer = float(data["odometer_km"])
+
         litres = float(data["litres"])
+
         cost = float(data["total_cost"])
 
     except (ValueError, TypeError):
+
         return error_response(
             "Invalid date or numeric values.",
             400
@@ -303,6 +386,7 @@ def add_fuel_record():
     full_tank = data.get("full_tank_flag", True)
 
     if not isinstance(full_tank, bool):
+
         return error_response(
             "full_tank_flag must be true or false.",
             400
@@ -314,6 +398,7 @@ def add_fuel_record():
         or litres <= 0
         or cost < 0
     ):
+
         return error_response(
             "Invalid vehicle ID, odometer, litres or cost.",
             400
@@ -323,44 +408,66 @@ def add_fuel_record():
     cursor = None
 
     try:
+
         connection = get_connection()
+
         cursor = connection.cursor(dictionary=True)
 
         # Check whether vehicle exists.
+
         cursor.execute(
-            "SELECT vehicle_id FROM vehicles WHERE vehicle_id = %s",
+            """
+            SELECT vehicle_id
+            FROM vehicles
+            WHERE vehicle_id = %s
+            """,
             (vehicle_id,)
         )
 
         if cursor.fetchone() is None:
+
             return error_response(
                 "Vehicle not found.",
                 404
             )
 
-        # Get latest record for this vehicle.
+        # Get latest fuel record.
+
         cursor.execute("""
-            SELECT fill_date, odometer_km
+            SELECT
+                fill_date,
+                odometer_km
+
             FROM fuel_records
+
             WHERE vehicle_id = %s
-            ORDER BY fill_date DESC, record_id DESC
+
+            ORDER BY
+                fill_date DESC,
+                record_id DESC
+
             LIMIT 1
         """, (vehicle_id,))
 
         previous = cursor.fetchone()
 
         if previous:
+
             if fill_date < previous["fill_date"]:
+
                 return error_response(
                     "Fill date cannot be earlier than the latest record.",
                     400
                 )
 
             if odometer <= float(previous["odometer_km"]):
+
                 return error_response(
                     "Odometer must be greater than the previous reading.",
                     400
                 )
+
+        # Insert new fuel record.
 
         cursor.execute("""
             INSERT INTO fuel_records (
@@ -371,6 +478,7 @@ def add_fuel_record():
                 total_cost,
                 full_tank_flag
             )
+
             VALUES (%s, %s, %s, %s, %s, %s)
         """, (
             vehicle_id,
@@ -389,17 +497,19 @@ def add_fuel_record():
         }), 201
 
     except Error:
+
         if connection and connection.is_connected():
             connection.rollback()
 
         logging.exception("Could not add fuel record")
 
         return error_response(
-            "Could not save fuel record. Check MySQL configuration.",
+            "Could not save fuel record. Check database configuration.",
             500
         )
 
     finally:
+
         close_database(connection, cursor)
 
 
@@ -408,8 +518,9 @@ def add_fuel_record():
 # --------------------------------------------------
 
 if __name__ == "__main__":
+
     app.run(
-        host="127.0.0.1",
-        port=5000,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5002")),
         debug=False
     )
